@@ -1,0 +1,12 @@
+appId: com.vatacars.hub
+productName: vatACARS Hub
+copyright: Copyright © 2024 vatACARS Team
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - from: .
+    filter:
+      - package.json
+      - app
+publish: null
