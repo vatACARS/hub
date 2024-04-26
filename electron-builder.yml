@@ -9,4 +9,10 @@ files:
     filter:
       - package.json
       - app
-publish: null
+protocols:
+  name: vatACARS Hub
+  schemes: [vatacars]
+publish:
+  provider: generic
+  url: https://api.vatacars.com/hub/dist/
+  channel: main
