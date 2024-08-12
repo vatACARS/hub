@@ -8,7 +8,7 @@ vatACARS is designed to enhance the functionality of vatSys, a popular air traff
 
 ## Contributing
 
-Contributions to the vatACARS plugin are welcome and encouraged. If you would like to contribute to the development of the plugin, please follow these guidelines:
+Contributions to the vatACARS hub are welcome and encouraged. If you would like to contribute to the development of the hub, please follow these guidelines:
 
 1. **Fork the Repository:** Start by forking the repository to your own GitHub account.
 2. **Clone the Repository:** Clone your forked repository to your local machine using Git.
@@ -45,8 +45,8 @@ If you encounter any bugs or would like to request a new feature, please open an
 
 ## License
 
-The vatACARS hub is licensed under the [GNU General Public License v3.0](https://github.com/vatACARS/plugin/blob/master/LICENSE.txt).
+The vatACARS hub is licensed under the [GNU General Public License v3.0](https://github.com/vatACARS/hub/blob/master/LICENSE.txt).
 
 ## Disclaimer
 
-This plugin is developed independently and is not officially endorsed or affiliated with vatSys or any associated organizations. Use at your own risk.
+This hub is developed independently and is not officially endorsed or affiliated with vatSys or any associated organizations. Use at your own risk.
