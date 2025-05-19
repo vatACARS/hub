@@ -15,7 +15,7 @@ export async function download(sourceUrl, targetFile, progressCallback, length?)
     throw Error('No response body');
   }
 
-  const finalLength = length || parseInt(response.headers.get('Content-Length' || '0'), 10);
+  const finalLength = length || parseInt(response.headers.get('Content-Length') || '0', 10);
   const reader = body.getReader();
   const writer = fs.createWriteStream(targetFile);
 

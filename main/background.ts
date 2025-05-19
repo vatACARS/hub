@@ -1,23 +1,68 @@
 import fs from 'fs';
 import path from 'path';
-import { app, ipcMain, dialog, ipcRenderer } from 'electron';
+import { app, ipcMain, dialog, BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import serve from 'electron-serve';
-import { createWindow, download } from './helpers';
+import { createWindow } from './helpers';
 import Store from 'electron-store';
 import sudoPrompt from '@vscode/sudo-prompt';
+import AdmZip from 'adm-zip';
+import axios from 'axios';
+import { pipeline } from 'stream';
+import { promisify } from 'util';
 
-let strapWindow, mainWindow;
-
+const pipe = promisify(pipeline);
+const store = new Store({ name: 'vatacars' });
 const isProd = process.env.NODE_ENV === 'production';
-let store;
+
+let strapWindow: Electron.BrowserWindow;
+let mainWindow: Electron.BrowserWindow;
 
 if (isProd) {
-  serve({ directory: 'app' });
-  store = new Store({ name: 'vatacars' });
+  serve({ directory: 'out' });
 } else {
-  store = new Store({ name: 'vatacars-dev' });
   app.setPath('userData', `${app.getPath('userData')} (development)`);
+}
+
+function runProcessElevated(command: string, isCopyDir = false) {
+  return new Promise<string>((resolve, reject) => {
+    if (!isCopyDir) {
+      return sudoPrompt.exec(command, { name: 'Install vatACARS' }, (error, stdout, stderr) => {
+        if (error) return reject(error);
+        return resolve(stdout?.toString?.() ?? '');
+      });
+    }
+
+    const source = command.split('|')[0].trim();
+    const dest = command.split('|')[1].trim();
+    const scriptPath = path.join(app.getPath('userData'), '__copy_plugin.ps1');
+
+    const scriptContent = `
+      Copy-Item -Path '${source}' -Destination '${dest}' -Recurse -Force
+      if ($?) { Write-Output "PLUGIN_COPY_SUCCESS" } else { exit 1 }
+    `;
+
+    fs.writeFileSync(scriptPath, scriptContent);
+
+    const psCommand = `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`;
+
+    sudoPrompt.exec(psCommand, { name: 'Install vatACARS' }, (error, stdout, stderr) => {
+      if (stdout?.toString?.().includes("PLUGIN_COPY_SUCCESS")) {
+        fs.unlinkSync(scriptPath);
+        return resolve("PowerShell copy succeeded");
+      }
+
+      console.error('PowerShell stderr:', stderr?.toString?.());
+      return reject(error || new Error('PowerShell copy failed'));
+    });
+  });
+}
+
+function checkProcess(query: string, cb: (running: boolean) => void) {
+  const exec = require('child_process').exec;
+  let cmd = process.platform === 'win32' ? 'tasklist' : 'ps -A';
+  if (process.platform === 'darwin') cmd = `ps -ax | grep ${query}`;
+  exec(cmd, (err, stdout) => cb(stdout.toLowerCase().includes(query.toLowerCase())));
 }
 
 function initUpdates() {
@@ -41,12 +86,22 @@ function initUpdates() {
   autoUpdater.checkForUpdates();
 }
 
+async function safeLoadURL(pathName: string) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const port = process.argv[2];
+    const url = isProd ? `app://./${pathName}` : `http://localhost:${port}/${pathName}`;
+    await mainWindow.loadURL(url);
+  }
+}
+
+app.on('window-all-closed', () => app.quit());
+
 (async () => {
   await app.whenReady();
 
   strapWindow = createWindow('bootstrapper', {
-    width: 460,
-    height: 220,
+    width: 1920,
+    height: 1080,
     center: true,
     frame: false,
     resizable: false,
@@ -55,20 +110,14 @@ function initUpdates() {
     },
   });
 
-  if (isProd) {
-    await strapWindow.loadURL('app://./');
-  } else {
-    const port = process.argv[2];
-    await strapWindow.loadURL(`http://localhost:${port}/`);
-  }
+  const port = process.argv[2];
+  const url = isProd ? 'app://./' : `http://localhost:${port}/`;
+  await strapWindow.loadURL(url);
 })();
 
-app.on('window-all-closed', () => {
-  app.quit();
-});
-
-ipcMain.on('openApp', async (event, arg) => {
+ipcMain.on('openApp', async () => {
   strapWindow.close();
+
   mainWindow = createWindow('main', {
     width: 1024,
     height: 640,
@@ -81,66 +130,37 @@ ipcMain.on('openApp', async (event, arg) => {
     },
   });
 
-  const UpsertKeyValue = (
-    header: Record<string, string> | Record<string, string[]>,
-    keyToChange: string,
-    value: string | string[],
-  ) => {
-    for (const key of Object.keys(header)) {
-      if (key.toLowerCase() === keyToChange.toLowerCase()) {
-        header[key] = value;
-        return;
-      }
-    }
-    header[keyToChange] = value;
-  };
-
-  mainWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
-    const { requestHeaders } = details;
-    UpsertKeyValue(requestHeaders, 'Access-Control-Allow-Origin', '*');
-    callback({ requestHeaders });
-  });
-
-  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-    const { responseHeaders } = details;
-    UpsertKeyValue(responseHeaders, 'Access-Control-Allow-Origin', ['*']);
-    UpsertKeyValue(responseHeaders, 'Access-Control-Allow-Headers', ['*']);
-    callback({
-      responseHeaders,
-    });
-  });
-
-  if (isProd) {
-    await mainWindow.loadURL('app://./welcome');
-    setTimeout(() => initUpdates(), 3000);
-  } else {
-    const port = process.argv[2];
-    await mainWindow.loadURL(`http://localhost:${port}/welcome`);
-    //setTimeout(() => mainWindow.webContents.send('updateAvailable', {}), 2000);
-    //mainWindow.webContents.openDevTools();
-  }
+  const port = process.argv[2];
+  const url = isProd ? 'app://./welcome' : `http://localhost:${port}/welcome`;
+  await mainWindow.loadURL(url);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     require('electron').shell.openExternal(url);
     return { action: 'deny' };
   });
+
+  if (isProd) setTimeout(() => initUpdates(), 3000);
 });
 
-ipcMain.on('windowControl', async (event, arg) => {
-  if (arg == 'minimize') return mainWindow.minimize();
-  if (arg == 'maximize') return mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
-  if (arg == 'close') return mainWindow.close();
-
-  if (arg == 'unrestrictSize') {
-    mainWindow.setResizable(true);
-    mainWindow.setMinimumSize(1024, 640);
+ipcMain.on('windowControl', (_event, arg) => {
+  const win = mainWindow || BrowserWindow.getFocusedWindow();
+  if (!win) return;
+  if (arg === 'minimize') win.minimize();
+  if (arg === 'maximize') win.isMaximized() ? win.unmaximize() : win.maximize();
+  if (arg === 'close') win.close();
+  if (arg === 'unrestrictSize') {
+    win.setResizable(true);
+    win.setMinimumSize(1024, 640);
   }
 });
 
-ipcMain.on('storeInteraction', async (event, arg) => {
-  if (arg.action == 'set') {
+ipcMain.on('navigate-home', () => safeLoadURL('home'));
+ipcMain.on('navigate-to', (_event, pathToGo: string) => safeLoadURL(pathToGo));
+
+ipcMain.on('storeInteraction', (event, arg) => {
+  if (arg.action === 'set') {
     store.set(arg.setting, arg.property);
-  } else if (arg.action == 'get') {
+  } else if (arg.action === 'get') {
     event.reply('storeInteractionReply', {
       setting: arg.setting,
       property: store.get(arg.setting) || false,
@@ -148,131 +168,187 @@ ipcMain.on('storeInteraction', async (event, arg) => {
   }
 });
 
-ipcMain.on('installUpdate', async (_event, _arg) => {
-  autoUpdater.downloadUpdate();
-});
+ipcMain.on('installUpdate', () => autoUpdater.downloadUpdate());
+ipcMain.on('restartApp', () => autoUpdater.quitAndInstall());
 
-ipcMain.on('restartApp', (_event, _arg) => {
-  autoUpdater.quitAndInstall();
-});
-
-function checkProcess(query, cb) {
-  const exec = require('child_process').exec;
-
-  let platform = process.platform;
-  let cmd = '';
-  switch (platform) {
-    case 'win32':
-      cmd = `tasklist`;
-      break;
-    case 'darwin':
-      cmd = `ps -ax | grep ${query}`;
-      break;
-    case 'linux':
-      cmd = `ps -A`;
-      break;
-    default:
-      break;
-  }
-  exec(cmd, (err, stdout, stderr) => {
-    cb(stdout.toLowerCase().indexOf(query.toLowerCase()) > -1);
+async function download(url: string, dest: string, onProgress?: (bytes: number, percent: number) => void) {
+  const response = await axios.get(url, {
+    responseType: 'stream',
+    maxRedirects: 5,
   });
+
+  const totalLength = parseInt(response.headers['content-length'] || '0', 10);
+  let downloaded = 0;
+
+  const writer = fs.createWriteStream(dest);
+
+  response.data.on('data', (chunk: Buffer) => {
+    downloaded += chunk.length;
+    if (onProgress && totalLength > 0) {
+      onProgress(downloaded, Math.min((downloaded / totalLength) * 100, 100));
+    }
+  });
+
+  await pipe(response.data, writer);
 }
 
 ipcMain.on('downloadPlugin', async (event, arg) => {
-  const { downloadUrl } = arg;
+  const { pluginName, downloadUrl, version, extract } = arg;
+
+  if (!pluginName || !downloadUrl) {
+    return event.reply('downloadPluginReply', {
+      pluginName,
+      status: 'failed',
+      error: 'Missing pluginName or downloadUrl',
+    });
+  }
 
   checkProcess('vatSys.exe', async (running) => {
-    if (running) return event.reply('downloadPluginReply', { status: 'running' });
-    let vatSysLoc = store.get('vatSysLoc');
+    if (running) {
+      return event.reply('downloadPluginReply', { pluginName, status: 'running' });
+    }
+
+    let vatSysLoc = store.get('vatSysLoc') as string | undefined;
     if (!vatSysLoc) {
-      if (fs.existsSync('C:\\Program Files (x86)\\vatSys\\bin')) {
-        vatSysLoc = 'C:\\Program Files (x86)\\vatSys\\bin';
-      } else
-        vatSysLoc = dialog
-          .showOpenDialogSync({
-            title: 'Select your vatSys.exe installation.',
-            properties: ['openFile'],
-            filters: [{ name: 'vatSys.exe', extensions: ['exe'] }],
-          })[0]
-          .split('\\')
-          .slice(0, -1)
-          .join('\\');
+      const result = dialog.showOpenDialogSync({
+        title: 'Select your vatSys.exe installation.',
+        properties: ['openFile'],
+        filters: [{ name: 'vatSys.exe', extensions: ['exe'] }],
+      });
+      if (!result) return;
+      vatSysLoc = result[0].split('\\').slice(0, -1).join('\\');
       store.set('vatSysLoc', vatSysLoc);
     }
 
-    const pluginLoc = path.join(app.getPath('userData'), 'vatACARS.dll');
-    await download(downloadUrl, pluginLoc, (bytes, percent) => {
-      event.reply('downloadPluginReply', { status: 'downloading', bytes, percent });
+    const pluginsRoot = path.join(vatSysLoc, 'Plugins');
+    const pluginFolder = path.join(pluginsRoot, pluginName);
+    const pluginFile = path.join(pluginsRoot, `${pluginName}.dll`);
+    const pluginTarget = path.join(app.getPath('userData'), `${pluginName}.${extract ? 'zip' : 'dll'}`);
+
+    if (!fs.existsSync(pluginsRoot)) {
+      fs.mkdirSync(pluginsRoot, { recursive: true });
+    }
+
+    console.log(`📦 Downloading plugin from ${downloadUrl} to ${pluginTarget}`);
+    await download(downloadUrl, pluginTarget, (bytes, percent) => {
+      event.reply('downloadPluginReply', { pluginName, status: 'downloading', bytes, percent });
     });
 
-    const command = `copy /Y "${pluginLoc}" "${vatSysLoc}\\Plugins\\vatACARS.dll"`;
-    await event.reply('downloadPluginReply', { status: 'installing' });
-    await runProcessElevated(command).catch(() => {
-      return event.reply('downloadPluginReply', { status: 'failed' });
-    });
+    event.reply('downloadPluginReply', { pluginName, status: 'installing' });
 
-    store.set('pluginInstalledVersion', arg.version);
-    event.reply('checkDownloadedPluginReply', { installed: true, version: arg.version });
-    return event.reply('downloadPluginReply', { status: 'done' });
+    try {
+      if (extract) {
+        console.log("🗃 Extracting ZIP to temp...");
+        const tempExtractPath = path.join(app.getPath('userData'), `${pluginName}-extract`);
+        if (fs.existsSync(tempExtractPath)) fs.rmSync(tempExtractPath, { recursive: true, force: true });
+
+        const zip = new AdmZip(pluginTarget);
+        zip.extractAllTo(tempExtractPath, true);
+
+        await runProcessElevated(`${tempExtractPath} | ${pluginFolder}`, true);
+        fs.rmSync(tempExtractPath, { recursive: true, force: true });
+      } else {
+        const command = `copy /Y "${pluginTarget}" "${pluginFile}"`;
+        await runProcessElevated(command);
+      }
+
+      store.set(`plugin_${pluginName}_version`, version);
+
+      setTimeout(() => {
+        const pluginFolderCheck = path.join(vatSysLoc!, 'Plugins', pluginName);
+        const pluginFileCheck = path.join(vatSysLoc!, 'Plugins', `${pluginName}.dll`);
+        const exists = fs.existsSync(pluginFolderCheck) || fs.existsSync(pluginFileCheck);
+
+        if (exists) {
+          event.reply('checkDownloadedPluginReply', { pluginName, installed: true, version });
+          event.reply('downloadPluginReply', { pluginName, status: 'done' });
+        } else {
+          event.reply('downloadPluginReply', {
+            pluginName,
+            status: 'failed',
+            error: 'Install completed but plugin not found.',
+          });
+        }
+      }, 300);
+    } catch (error: any) {
+      console.error("❌ Plugin install error:", error);
+      event.reply('downloadPluginReply', {
+        pluginName,
+        status: 'failed',
+        error: error.message || String(error),
+      });
+    }
   });
 });
 
 ipcMain.on('uninstallPlugin', async (event, arg) => {
-  checkProcess('vatSys.exe', async (running) => {
-    if (running) return event.reply('uninstallPluginReply', { status: 'running' });
-    let vatSysLoc = store.get('vatSysLoc');
-    if (!vatSysLoc) {
-      if (fs.existsSync('C:\\Program Files (x86)\\vatSys\\bin')) {
-        vatSysLoc = 'C:\\Program Files (x86)\\vatSys\\bin';
-      } else
-        vatSysLoc = dialog
-          .showOpenDialogSync({
-            title: 'Select your vatSys.exe installation.',
-            properties: ['openFile'],
-            filters: [{ name: 'vatSys.exe', extensions: ['exe'] }],
-          })[0]
-          .split('\\')
-          .slice(0, -1)
-          .join('\\');
-      store.set('vatSysLoc', vatSysLoc);
+  const { pluginName } = arg;
+  if (!pluginName) return;
+
+  const vatSysLoc = store.get('vatSysLoc') as string | undefined;
+  if (!vatSysLoc) return;
+
+  const pluginFolder = path.join(vatSysLoc, 'Plugins', pluginName);
+  const pluginFile = path.join(vatSysLoc, 'Plugins', `${pluginName}.dll`);
+
+  try {
+    let command = '';
+    if (fs.existsSync(pluginFolder)) {
+      command = `rmdir /S /Q "${pluginFolder}"`;
+    } else if (fs.existsSync(pluginFile)) {
+      command = `del /F /Q "${pluginFile}"`;
     }
 
-    const pluginLoc = path.join(vatSysLoc, 'Plugins\\vatACARS.dll');
-    const command = `del /Q "${pluginLoc}"`;
-    await runProcessElevated(command).catch(() => {
-      return event.reply('uninstallPluginReply', { status: 'failed' });
-    });
+    if (command) {
+      await runProcessElevated(command);
+    }
 
-    return event.reply('uninstallPluginReply', { status: 'done' });
+    event.reply('uninstallPluginReply', { pluginName, status: 'done' });
+  } catch (err) {
+    console.error("❌ Failed to uninstall plugin:", err);
+    event.reply('uninstallPluginReply', { pluginName, status: 'failed' });
+  }
+});
+
+ipcMain.on('checkDownloadedPlugin', (event, arg) => {
+  const { pluginName } = arg;
+  if (!pluginName) return;
+
+  const vatSysLoc = store.get('vatSysLoc') as string | undefined;
+  if (!vatSysLoc) {
+    return event.reply('checkDownloadedPluginReply', {
+      pluginName,
+      installed: false,
+    });
+  }
+
+  const pluginFolder = path.join(vatSysLoc, 'Plugins', pluginName);
+  const pluginFile = path.join(vatSysLoc, 'Plugins', `${pluginName}.dll`);
+  const version = store.get(`plugin_${pluginName}_version`) as string;
+
+  const installed = fs.existsSync(pluginFolder) || fs.existsSync(pluginFile);
+  event.reply('checkDownloadedPluginReply', {
+    pluginName,
+    installed,
+    version: installed ? version : null,
   });
 });
+function cleanUpTempFiles(pluginName: string) {
+  const userData = app.getPath('userData');
+  const zipFile = path.join(userData, `${pluginName}.zip`);
+  const dllFile = path.join(userData, `${pluginName}.dll`);
+  const extractFolder = path.join(userData, `${pluginName}-extract`);
+  const psScript = path.join(userData, '__copy_plugin.ps1');
 
-ipcMain.on('checkDownloadedPlugin', async (event, arg) => {
-  let vatSysLoc = store.get('vatSysLoc');
-  if (!vatSysLoc) return event.reply('checkDownloadedPluginReply', { installed: false });
-
-  const pluginLoc = path.join(vatSysLoc, 'Plugins\\vatACARS.dll');
-  const exists = require('fs').existsSync(pluginLoc);
-  let cVer = store.get('pluginInstalledVersion');
-  if (!cVer) store.set('pluginInstalledVersion', '1.0.1');
-  event.reply('checkDownloadedPluginReply', { installed: exists, version: exists ? cVer || '1.0.1' : null });
-});
-
-function runProcessElevated(command: string) {
-  return new Promise<string>((resolve, reject) => {
-    sudoPrompt.exec(command, { name: 'Install vatACARS' }, (error, stdout, stderr) => {
-      if (stdout) {
-        console.log('runProcessElevated', stdout);
-      }
-      if (stderr) {
-        console.log('runProcessElevated', stderr);
-      }
-      if (error) {
-        reject(error);
+  [zipFile, dllFile, extractFolder, psScript].forEach((item) => {
+    if (fs.existsSync(item)) {
+      const stat = fs.statSync(item);
+      if (stat.isDirectory()) {
+        fs.rmSync(item, { recursive: true, force: true });
       } else {
-        resolve(stdout.toString());
+        fs.unlinkSync(item);
       }
-    });
+    }
   });
 }
+
