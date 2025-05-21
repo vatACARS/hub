@@ -8,6 +8,29 @@ import Store from 'electron-store';
 import sudoPrompt from '@vscode/sudo-prompt';
 import semver from 'semver';
 import { spawnSync } from 'child_process';
+import axios from 'axios'; // Add to your dependencies if not present
+
+const GITHUB_REPO = "vatACARS/vatacars-hub"; // Change to your repo
+
+async function checkForAppUpdate() {
+  try {
+    const response = await axios.get(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`);
+    const latest = response.data;
+    const latestVersion = latest.tag_name.startsWith('v') ? latest.tag_name.slice(1) : latest.tag_name;
+    const currentVersion = app.getVersion();
+
+    return {
+      updateAvailable: require('semver').gt(latestVersion, currentVersion),
+      latestVersion,
+      currentVersion,
+      releaseNotes: latest.body,
+      downloadUrl: latest.assets?.[0]?.browser_download_url || null,
+    };
+  } catch (err) {
+    console.error("Failed to check for app update:", err);
+    return null;
+  }
+}
 
 let strapWindow, mainWindow;
 let splashStartTime: number;
@@ -279,12 +302,17 @@ function extractVersionFromText(text: string): string | null {
 
 // Helper: Scan plugin directory for version (now only uses config or version.json)
 function scanPluginVersion(pluginDir: string, pluginName: string): string | null {
-  // 1. Check for version.json
+  // 1. Check for version.json (universal for all plugins)
   const versionJsonPath = path.join(pluginDir, 'version.json');
   if (fs.existsSync(versionJsonPath)) {
     try {
       const data = JSON.parse(fs.readFileSync(versionJsonPath, 'utf8'));
-      return typeof data === 'string' ? data : data.version || null;
+      // Accept both { "version": "x.y.z" }, "x.y.z", or { "Major": x, "Minor": y }
+      if (typeof data === 'string') return data;
+      if (typeof data.version === 'string') return data.version;
+      if (typeof data.Major !== 'undefined' && typeof data.Minor !== 'undefined') {
+        return `${data.Major}.${data.Minor}`;
+      }
     } catch { }
   }
 
@@ -571,4 +599,30 @@ ipcMain.on('readInstalledVersion', (event, arg) => {
     if (match) installedVersion = match[1].trim();
   }
   event.reply('readInstalledVersionReply', { pluginName, installedVersion });
+});
+
+ipcMain.handle('checkAppUpdate', async () => {
+  return await checkForAppUpdate();
+});
+
+ipcMain.handle('downloadAndInstallAppUpdate', async (_event, downloadUrl) => {
+  const tmpPath = path.join(app.getPath('temp'), path.basename(downloadUrl));
+  const writer = fs.createWriteStream(tmpPath);
+
+  const response = await axios({
+    url: downloadUrl,
+    method: 'GET',
+    responseType: 'stream'
+  });
+
+  response.data.pipe(writer);
+
+  return new Promise((resolve, reject) => {
+    writer.on('finish', () => {
+      require('child_process').spawn(tmpPath, [], { detached: true, stdio: 'ignore' }).unref();
+      app.quit();
+      resolve(true);
+    });
+    writer.on('error', reject);
+  });
 });

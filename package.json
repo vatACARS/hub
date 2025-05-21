@@ -2,10 +2,10 @@
   "private": true,
   "name": "vatacars-hub",
   "description": "The vatACARS Hub software.",
-  "version": "2.0.0-alpha",
+  "version": "2.0.0-alpha.1",
   "author": "vatACARS Team",
   "main": "app/background.js",
-    "scripts": {
+  "scripts": {
     "dev": "nextron",
     "build": "nextron build",
     "postinstall": "electron-builder install-app-deps",

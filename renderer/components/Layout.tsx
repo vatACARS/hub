@@ -1,29 +1,29 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { motion, AnimatePresence } from 'framer-motion';
-import { HiMenu, HiX } from 'react-icons/hi';
-import { FaUserCircle, FaArrowLeft } from 'react-icons/fa';
+import { HiMenu, HiX, HiChevronLeft } from 'react-icons/hi';
 
 const appClientsList = [
     { name: 'Home', path: '/home' },
     { name: 'vatSys Plugin', path: '/vatsys' },
     { name: 'Euroscope Plugin', path: '/euroscope' },
     { name: 'Pilot Client', path: '/pilot' },
-    { name: 'OzStrips', path: '/OzStrips' },
+    // Recommended Plugins will be a toggle, not a page
 ];
 
-const accountClientsList = [
-    { name: 'Account', path: '/account' },
-    { name: 'Settings', path: '/settings' },
+const recommendedPluginsList = [
+    { name: 'OzStrips', path: '/OzStrips' },
+    { name: 'Vatpac Plugin (vatSys Server Lite)', path: '/vatpacplugin' },
+    // Add more recommended plugins here as needed
 ];
 
 export default function Layout({ children }: { children: React.ReactNode }) {
     const router = useRouter();
     const [sidebarOpen, setSidebarOpen] = useState(false);
-    const [accountView, setAccountView] = useState(false);
     const [fadeOutContent, setFadeOutContent] = useState(false);
     const [fadeOutSidebar, setFadeOutSidebar] = useState(false);
     const [navigatingPath, setNavigatingPath] = useState<string | null>(null);
+    const [showRecommended, setShowRecommended] = useState(false);
 
     const handleNavigation = (path: string) => {
         if (path === router.pathname) return;
@@ -82,53 +82,61 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             >
                 <div className="flex flex-col space-y-2">
                     <h2 className="text-white text-xl font-bold mb-2 text-center">
-                        {accountView ? 'User Area' : 'Applications'}
+                        Applications
                     </h2>
-
                     <AnimatePresence mode="wait">
                         <motion.div
-                            key={accountView ? 'account-view' : 'app-view'}
+                            key={showRecommended ? "recommended-view" : "app-view"}
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             transition={{ duration: 0.3 }}
                             className="flex flex-col space-y-2"
                         >
-                            {(accountView ? accountClientsList : appClientsList).map((client) => (
-                                <button
-                                    key={client.name}
-                                    onClick={() => handleNavigation(client.path)}
-                                    className={`p-3 rounded-md cursor-pointer hover:bg-slate-700 text-slate-300 ${router.pathname === client.path ? 'bg-blue-500 text-white font-bold' : ''
-                                        }`}
-                                    disabled={!!navigatingPath}
-                                >
-                                    {client.name}
-                                </button>
-                            ))}
+                            {!showRecommended ? (
+                                <>
+                                    {appClientsList.map((client) => (
+                                        <button
+                                            key={client.name}
+                                            onClick={() => handleNavigation(client.path)}
+                                            className={`p-3 rounded-md cursor-pointer hover:bg-slate-700 text-slate-300 ${router.pathname === client.path ? 'bg-blue-500 text-white font-bold' : ''
+                                                }`}
+                                            disabled={!!navigatingPath}
+                                        >
+                                            {client.name}
+                                        </button>
+                                    ))}
+                                    <button
+                                        onClick={() => setShowRecommended(true)}
+                                        className="p-3 rounded-md cursor-pointer hover:bg-emerald-700 text-emerald-300 font-semibold border-t border-slate-700 mt-2"
+                                    >
+                                        Recommended Plugins
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={() => setShowRecommended(false)}
+                                        className="flex items-center gap-2 p-2 mb-2 text-slate-400 hover:text-white"
+                                    >
+                                        <HiChevronLeft /> Back
+                                    </button>
+                                    <h3 className="text-emerald-300 font-bold mb-2 text-center">Recommended Plugins</h3>
+                                    {recommendedPluginsList.map((plugin) => (
+                                        <button
+                                            key={plugin.name}
+                                            onClick={() => handleNavigation(plugin.path)}
+                                            className={`p-3 rounded-md cursor-pointer hover:bg-slate-700 text-slate-300 ${router.pathname === plugin.path ? 'bg-blue-500 text-white font-bold' : ''
+                                                }`}
+                                            disabled={!!navigatingPath}
+                                        >
+                                            {plugin.name}
+                                        </button>
+                                    ))}
+                                </>
+                            )}
                         </motion.div>
                     </AnimatePresence>
-                </div>
-
-                <div className="flex-grow"></div>
-
-                <div className="flex flex-col space-y-2">
-                    {accountView ? (
-                        <button
-                            onClick={() => setAccountView(false)}
-                            className="p-3 rounded-md bg-slate-700 text-white hover:bg-slate-600 flex items-center justify-center space-x-2"
-                        >
-                            <FaArrowLeft />
-                            <span>Back</span>
-                        </button>
-                    ) : (
-                        <button
-                            onClick={() => setAccountView(true)}
-                            className="p-3 rounded-md bg-slate-700 text-white hover:bg-slate-600 flex items-center justify-center space-x-2"
-                        >
-                            <FaUserCircle size={24} />
-                            <span>Account</span>
-                        </button>
-                    )}
                 </div>
             </motion.aside>
 
