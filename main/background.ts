@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { app, ipcMain, dialog, BrowserWindow } from 'electron';
+import { app, ipcMain, dialog } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import serve from 'electron-serve';
 import { createWindow } from './helpers';
@@ -12,90 +12,22 @@ import { pipeline } from 'stream';
 import { promisify } from 'util';
 
 const pipe = promisify(pipeline);
-const store = new Store({ name: 'vatacars' });
+
+// Store initialization as in previous version
 const isProd = process.env.NODE_ENV === 'production';
+let store: Store;
+if (isProd) {
+  serve({ directory: 'app' }); // directory 'app' as in previous version
+  store = new Store({ name: 'vatacars' });
+} else {
+  store = new Store({ name: 'vatacars-dev' });
+  app.setPath('userData', `${app.getPath('userData')} (development)`);
+}
 
 let strapWindow: Electron.BrowserWindow;
 let mainWindow: Electron.BrowserWindow;
 
-if (isProd) {
-  serve({ directory: 'out' });
-} else {
-  app.setPath('userData', `${app.getPath('userData')} (development)`);
-}
-
-function runProcessElevated(command: string, isCopyDir = false) {
-  return new Promise<string>((resolve, reject) => {
-    if (!isCopyDir) {
-      return sudoPrompt.exec(command, { name: 'Install vatACARS' }, (error, stdout, stderr) => {
-        if (error) return reject(error);
-        return resolve(stdout?.toString?.() ?? '');
-      });
-    }
-
-    const source = command.split('|')[0].trim();
-    const dest = command.split('|')[1].trim();
-    const scriptPath = path.join(app.getPath('userData'), '__copy_plugin.ps1');
-
-    const scriptContent = `
-      Copy-Item -Path '${source}' -Destination '${dest}' -Recurse -Force
-      if ($?) { Write-Output "PLUGIN_COPY_SUCCESS" } else { exit 1 }
-    `;
-
-    fs.writeFileSync(scriptPath, scriptContent);
-
-    const psCommand = `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`;
-
-    sudoPrompt.exec(psCommand, { name: 'Install vatACARS' }, (error, stdout, stderr) => {
-      if (stdout?.toString?.().includes("PLUGIN_COPY_SUCCESS")) {
-        fs.unlinkSync(scriptPath);
-        return resolve("PowerShell copy succeeded");
-      }
-
-      console.error('PowerShell stderr:', stderr?.toString?.());
-      return reject(error || new Error('PowerShell copy failed'));
-    });
-  });
-}
-
-function checkProcess(query: string, cb: (running: boolean) => void) {
-  const exec = require('child_process').exec;
-  let cmd = process.platform === 'win32' ? 'tasklist' : 'ps -A';
-  if (process.platform === 'darwin') cmd = `ps -ax | grep ${query}`;
-  exec(cmd, (err, stdout) => cb(stdout.toLowerCase().includes(query.toLowerCase())));
-}
-
-function initUpdates() {
-  if (process.platform === 'win32') app.setAppUserModelId(app.name);
-  if (!mainWindow) return;
-
-  autoUpdater.autoDownload = false;
-
-  autoUpdater.on('update-available', () => {
-    mainWindow.webContents.send('updateAvailable', {});
-  });
-
-  autoUpdater.on('download-progress', (progressObj) => {
-    mainWindow.webContents.send('updateProgress', progressObj.percent.toFixed(1));
-  });
-
-  autoUpdater.on('update-downloaded', () => {
-    mainWindow.webContents.send('updateComplete', {});
-  });
-
-  autoUpdater.checkForUpdates();
-}
-
-async function safeLoadURL(pathName: string) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const port = process.argv[2];
-    const url = isProd ? `app://./${pathName}` : `http://localhost:${port}/${pathName}`;
-    await mainWindow.loadURL(url);
-  }
-}
-
-app.on('window-all-closed', () => app.quit());
-
+// ----- Window Creation Logic -----
 (async () => {
   await app.whenReady();
 
@@ -142,8 +74,53 @@ ipcMain.on('openApp', async () => {
   if (isProd) setTimeout(() => initUpdates(), 3000);
 });
 
-ipcMain.on('windowControl', (_event, arg) => {
-  const win = mainWindow || BrowserWindow.getFocusedWindow();
+  // Add the CORS headers as in the previous version
+  const UpsertKeyValue = (
+    header: Record<string, string> | Record<string, string[]>,
+    keyToChange: string,
+    value: string | string[],
+  ) => {
+    for (const key of Object.keys(header)) {
+      if (key.toLowerCase() === keyToChange.toLowerCase()) {
+        header[key] = value;
+        return;
+      }
+    }
+    header[keyToChange] = value;
+  };
+
+  mainWindow.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
+    const { requestHeaders } = details;
+    UpsertKeyValue(requestHeaders, 'Access-Control-Allow-Origin', '*');
+    callback({ requestHeaders });
+  });
+
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    const { responseHeaders } = details;
+    UpsertKeyValue(responseHeaders, 'Access-Control-Allow-Origin', ['*']);
+    UpsertKeyValue(responseHeaders, 'Access-Control-Allow-Headers', ['*']);
+    callback({
+      responseHeaders,
+    });
+  });
+
+  if (isProd) {
+    await mainWindow.loadURL('app://./welcome');
+    setTimeout(() => initUpdates(), 3000);
+  } else {
+    const port = process.argv[2];
+    await mainWindow.loadURL(`http://localhost:${port}/welcome`);
+  }
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    require('electron').shell.openExternal(url);
+    return { action: 'deny' };
+  });
+});
+
+// ---- Window Control Logic ----
+ipcMain.on('windowControl', async (_event, arg) => {
+  const win = mainWindow || require('electron').BrowserWindow.getFocusedWindow();
   if (!win) return;
   if (arg === 'minimize') win.minimize();
   if (arg === 'maximize') win.isMaximized() ? win.unmaximize() : win.maximize();
@@ -154,9 +131,7 @@ ipcMain.on('windowControl', (_event, arg) => {
   }
 });
 
-ipcMain.on('navigate-home', () => safeLoadURL('home'));
-ipcMain.on('navigate-to', (_event, pathToGo: string) => safeLoadURL(pathToGo));
-
+// ---- Store Interaction ----
 ipcMain.on('storeInteraction', (event, arg) => {
   if (arg.action === 'set') {
     store.set(arg.setting, arg.property);
@@ -168,9 +143,52 @@ ipcMain.on('storeInteraction', (event, arg) => {
   }
 });
 
+// ---- Updater Integration ----
+function initUpdates() {
+  if (process.platform === 'win32') app.setAppUserModelId(app.name);
+  if (!mainWindow) return;
+
+  autoUpdater.autoDownload = false;
+
+  autoUpdater.on('update-available', () => {
+    mainWindow.webContents.send('updateAvailable', {});
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    mainWindow.webContents.send('updateProgress', progressObj.percent.toFixed(1));
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    mainWindow.webContents.send('updateComplete', {});
+  });
+
+  autoUpdater.checkForUpdates();
+}
+
 ipcMain.on('installUpdate', () => autoUpdater.downloadUpdate());
 ipcMain.on('restartApp', () => autoUpdater.quitAndInstall());
 
+// ---- Process Checker ----
+function checkProcess(query: string, cb: (running: boolean) => void) {
+  const exec = require('child_process').exec;
+  let cmd = '';
+  switch (process.platform) {
+    case 'win32':
+      cmd = 'tasklist';
+      break;
+    case 'darwin':
+      cmd = `ps -ax | grep ${query}`;
+      break;
+    case 'linux':
+      cmd = 'ps -A';
+      break;
+    default:
+      break;
+  }
+  exec(cmd, (err, stdout) => cb(stdout.toLowerCase().includes(query.toLowerCase())));
+}
+
+// ---- Plugin Download Logic ----
 async function download(url: string, dest: string, onProgress?: (bytes: number, percent: number) => void) {
   const response = await axios.get(url, {
     responseType: 'stream',
@@ -192,6 +210,42 @@ async function download(url: string, dest: string, onProgress?: (bytes: number, 
   await pipe(response.data, writer);
 }
 
+// ---- Plugin Install/Uninstall/Check Logic ----
+function runProcessElevated(command: string, isCopyDir = false) {
+  return new Promise<string>((resolve, reject) => {
+    if (!isCopyDir) {
+      return sudoPrompt.exec(command, { name: 'Install vatACARS' }, (error, stdout, stderr) => {
+        if (stdout) console.log('runProcessElevated', stdout);
+        if (stderr) console.log('runProcessElevated', stderr);
+        if (error) return reject(error);
+        return resolve(stdout?.toString?.() ?? '');
+      });
+    }
+
+    const source = command.split('|')[0].trim();
+    const dest = command.split('|')[1].trim();
+    const scriptPath = path.join(app.getPath('userData'), '__copy_plugin.ps1');
+
+    const scriptContent = `
+      Copy-Item -Path '${source}' -Destination '${dest}' -Recurse -Force
+      if ($?) { Write-Output "PLUGIN_COPY_SUCCESS" } else { exit 1 }
+    `;
+
+    fs.writeFileSync(scriptPath, scriptContent);
+
+    const psCommand = `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`;
+
+    sudoPrompt.exec(psCommand, { name: 'Install vatACARS' }, (error, stdout, stderr) => {
+      if (stdout?.toString?.().includes("PLUGIN_COPY_SUCCESS")) {
+        fs.unlinkSync(scriptPath);
+        return resolve("PowerShell copy succeeded");
+      }
+      if (stderr) console.error('PowerShell stderr:', stderr?.toString?.());
+      return reject(error || new Error('PowerShell copy failed'));
+    });
+  });
+}
+
 ipcMain.on('downloadPlugin', async (event, arg) => {
   const { pluginName, downloadUrl, version, extract } = arg;
 
@@ -210,13 +264,17 @@ ipcMain.on('downloadPlugin', async (event, arg) => {
 
     let vatSysLoc = store.get('vatSysLoc') as string | undefined;
     if (!vatSysLoc) {
-      const result = dialog.showOpenDialogSync({
-        title: 'Select your vatSys.exe installation.',
-        properties: ['openFile'],
-        filters: [{ name: 'vatSys.exe', extensions: ['exe'] }],
-      });
-      if (!result) return;
-      vatSysLoc = result[0].split('\\').slice(0, -1).join('\\');
+      if (fs.existsSync('C:\\Program Files (x86)\\vatSys\\bin')) {
+        vatSysLoc = 'C:\\Program Files (x86)\\vatSys\\bin';
+      } else {
+        const result = dialog.showOpenDialogSync({
+          title: 'Select your vatSys.exe installation.',
+          properties: ['openFile'],
+          filters: [{ name: 'vatSys.exe', extensions: ['exe'] }],
+        });
+        if (!result) return;
+        vatSysLoc = result[0].split('\\').slice(0, -1).join('\\');
+      }
       store.set('vatSysLoc', vatSysLoc);
     }
 
@@ -285,8 +343,21 @@ ipcMain.on('uninstallPlugin', async (event, arg) => {
   const { pluginName } = arg;
   if (!pluginName) return;
 
-  const vatSysLoc = store.get('vatSysLoc') as string | undefined;
-  if (!vatSysLoc) return;
+  let vatSysLoc = store.get('vatSysLoc') as string | undefined;
+  if (!vatSysLoc) {
+    if (fs.existsSync('C:\\Program Files (x86)\\vatSys\\bin')) {
+      vatSysLoc = 'C:\\Program Files (x86)\\vatSys\\bin';
+    } else {
+      const result = dialog.showOpenDialogSync({
+        title: 'Select your vatSys.exe installation.',
+        properties: ['openFile'],
+        filters: [{ name: 'vatSys.exe', extensions: ['exe'] }],
+      });
+      if (!result) return;
+      vatSysLoc = result[0].split('\\').slice(0, -1).join('\\');
+    }
+    store.set('vatSysLoc', vatSysLoc);
+  }
 
   const pluginFolder = path.join(vatSysLoc, 'Plugins', pluginName);
   const pluginFile = path.join(vatSysLoc, 'Plugins', `${pluginName}.dll`);
@@ -314,13 +385,8 @@ ipcMain.on('checkDownloadedPlugin', (event, arg) => {
   const { pluginName } = arg;
   if (!pluginName) return;
 
-  const vatSysLoc = store.get('vatSysLoc') as string | undefined;
-  if (!vatSysLoc) {
-    return event.reply('checkDownloadedPluginReply', {
-      pluginName,
-      installed: false,
-    });
-  }
+  let vatSysLoc = store.get('vatSysLoc') as string | undefined;
+  if (!vatSysLoc) return event.reply('checkDownloadedPluginReply', { pluginName, installed: false });
 
   const pluginFolder = path.join(vatSysLoc, 'Plugins', pluginName);
   const pluginFile = path.join(vatSysLoc, 'Plugins', `${pluginName}.dll`);
@@ -333,6 +399,8 @@ ipcMain.on('checkDownloadedPlugin', (event, arg) => {
     version: installed ? version : null,
   });
 });
+
+// ---- Clean Up Logic ----
 function cleanUpTempFiles(pluginName: string) {
   const userData = app.getPath('userData');
   const zipFile = path.join(userData, `${pluginName}.zip`);
@@ -351,4 +419,3 @@ function cleanUpTempFiles(pluginName: string) {
     }
   });
 }
-
