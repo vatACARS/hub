@@ -1,8 +1,26 @@
 // pages/home.tsx
+import React, { useEffect, useState } from "react";
 import Layout from "../components/Layout";
 import { Toaster } from "react-hot-toast";
 
+const description = "Welcome to vatACARS Hub, the new home for all things to do with vatSys Plugins";
+
 export default function HomePage() {
+  const [typed, setTyped] = useState("");
+
+  useEffect(() => {
+    setTyped(""); // Reset on mount
+    let i = 0;
+    const interval = setInterval(() => {
+      i++;
+      setTyped(description.slice(0, i));
+      if (i >= description.length) {
+        clearInterval(interval);
+      }
+    }, 60);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <Layout>
       <Toaster position="top-center" />
@@ -17,7 +35,10 @@ export default function HomePage() {
             alt="vatACARS Logo"
             className="w-full max-w-[400px] h-auto object-contain pointer-events-none mb-4"
           />
-          <h1 className="text-4xl font-bold">Welcome to vatACARS</h1>
+          <h1 className="text-4xl font-bold">
+            <span>{typed}</span>
+            <span className="animate-pulse text-slate-400">|</span>
+          </h1>
         </div>
       </div>
     </Layout>

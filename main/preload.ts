@@ -15,26 +15,26 @@ const handler = {
   },
 };
 
-// Preload function for pages
 const preloadPages = async () => {
   const pagesToPreload = [
-    "/",     // Landing page
-    "home",     // Landing page
-    "euroscope",     // Landing page
-    "vatsys",     // Landing page
-    "pilot",     // Landing page
-    "test",     // Landing page
+    "/", // Landing page
+    "/home",
+    "/euroscope",
+    "/vatsys",
+    "/pilot",
+    "/OzStrips",
   ];
 
   for (const page of pagesToPreload) {
     try {
-      await fetch(page, { cache: "force-cache" }); // Use cache aggressively
+      await fetch(page, { cache: "force-cache" });
       console.log(`[Preload] Preloaded: ${page}`);
     } catch (error) {
       console.warn(`[Preload] Failed to preload ${page}:`, error);
     }
   }
 };
+
 
 // Expose to the window
 contextBridge.exposeInMainWorld('ipc', handler);

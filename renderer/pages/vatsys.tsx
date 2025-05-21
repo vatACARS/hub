@@ -1,6 +1,7 @@
 // pages/vatsys.tsx
 import Layout from "../components/Layout";
 import { useEffect } from "react";
+import PluginInstaller from "../components/PluginInstaller";
 
 export default function VatSysPage() {
     useEffect(() => {
@@ -44,6 +45,12 @@ export default function VatSysPage() {
                 <div className="relative z-10 flex flex-col items-center text-center">
                     <h1 className="text-4xl font-bold text-blue-400">vatSys Plugin</h1>
                     <p className="text-slate-300 mt-2">Plugin for vatSys integration.</p>
+                    <div className="mt-8 w-full max-w-xl">
+                        <PluginInstaller
+                            pluginName="vatacars-vatsys-plugin"
+                            repo="vatacars/vatsys-plugin"
+                        />
+                    </div>
                 </div>
             </div>
         </Layout>

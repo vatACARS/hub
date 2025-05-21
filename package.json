@@ -5,13 +5,11 @@
   "version": "2.0.0-alpha",
   "author": "vatACARS Team",
   "main": "app/background.js",
-  "scripts": {
-    "dev": "dotenv nextron",
-    "build": "dotenv nextron build",
-    "export": "next export",
-    "postinstall": "dotenv electron-builder install-app-deps",
-    "release": "dotenv electron-builder",
-    "start": "cross-env NODE_ENV=production electron ."
+    "scripts": {
+    "dev": "nextron",
+    "build": "nextron build",
+    "postinstall": "electron-builder install-app-deps",
+    "release": "electron-builder"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -29,6 +27,7 @@
     "ps-node": "^0.1.6",
     "react-hook-form": "^7.54.2",
     "react-hot-toast": "^2.5.2",
+    "semver": "^7.7.2",
     "semver-compare": "^1.0.0",
     "swr": "^2.2.5",
     "unzipper": "^0.12.3",

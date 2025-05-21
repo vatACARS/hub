@@ -1,4 +1,5 @@
 import Layout from "../components/Layout";
+import PluginInstaller from "../components/PluginInstaller";
 
 export default function PilotPage() {
     return (
@@ -8,6 +9,12 @@ export default function PilotPage() {
                 <div className="relative z-10 flex flex-col items-center text-center">
                     <h1 className="text-4xl font-bold text-violet-400">Pilot Client</h1>
                     <p className="text-slate-300 mt-2">Plugin for pilots connecting to VATSIM.</p>
+                    <div className="mt-8 w-full max-w-xl">
+                        <PluginInstaller
+                            pluginName="vatacars-pilot-client"
+                            repo="vatACARS/pilot-client"
+                        />
+                    </div>
                 </div>
             </div>
         </Layout>

@@ -9,7 +9,7 @@ const appClientsList = [
     { name: 'vatSys Plugin', path: '/vatsys' },
     { name: 'Euroscope Plugin', path: '/euroscope' },
     { name: 'Pilot Client', path: '/pilot' },
-    { name: 'Test Page', path: '/test' },
+    { name: 'OzStrips', path: '/OzStrips' },
 ];
 
 const accountClientsList = [
