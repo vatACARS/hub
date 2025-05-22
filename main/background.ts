@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { app, ipcMain, dialog } from 'electron';
+import { app, ipcMain, dialog, BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import serve from 'electron-serve';
 import { createWindow, download } from './helpers';
@@ -10,27 +10,47 @@ import semver from 'semver';
 import { spawnSync } from 'child_process';
 import axios from 'axios'; // Add to your dependencies if not present
 
-const GITHUB_REPO = "vatACARS/vatacars-hub"; // Change to your repo
+const GITHUB_REPO = "vatACARS/hub"; // Change to your repo
 
 async function checkForAppUpdate() {
   try {
-    const response = await axios.get(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`);
-    const latest = response.data;
-    const latestVersion = latest.tag_name.startsWith('v') ? latest.tag_name.slice(1) : latest.tag_name;
+    const response = await axios.get(`https://api.github.com/repos/${GITHUB_REPO}/releases`);
+    const releases = response.data;
+
+    // Find the latest valid semver release, including pre-releases
+    let latestRelease = releases
+      .map(release => {
+        let version = release.tag_name.startsWith('v') ? release.tag_name.slice(1) : release.tag_name;
+        if (!semver.valid(version)) {
+          const fallback = extractVersionFromString(release.name || release.title || release.body || '');
+          if (semver.valid(fallback)) version = fallback;
+        }
+        return { ...release, semverVersion: version };
+      })
+      .filter(r => semver.valid(r.semverVersion))
+      .sort((a, b) => semver.rcompare(a.semverVersion, b.semverVersion))[0]; // reverse compare: newest first
+
+    if (!latestRelease) throw new Error("No valid releases found");
+
+    const latestVersion = latestRelease.semverVersion;
     const currentVersion = app.getVersion();
+    const updateAvailable = semver.gt(latestVersion, currentVersion, { includePrerelease: true });
+
+    console.log(`[UpdateCheck] Current: ${currentVersion}, Latest: ${latestVersion}, Update Available: ${updateAvailable}`);
 
     return {
-      updateAvailable: require('semver').gt(latestVersion, currentVersion),
+      updateAvailable,
       latestVersion,
       currentVersion,
-      releaseNotes: latest.body,
-      downloadUrl: latest.assets?.[0]?.browser_download_url || null,
+      releaseNotes: latestRelease.body,
+      downloadUrl: latestRelease.assets?.[0]?.browser_download_url || null,
     };
   } catch (err) {
     console.error("Failed to check for app update:", err);
     return null;
   }
 }
+
 
 let strapWindow, mainWindow;
 let splashStartTime: number;
@@ -45,6 +65,13 @@ if (isProd) {
 } else {
   store = new Store({ name: 'vatacars-dev' });
   app.setPath('userData', `${app.getPath('userData')} (development)`);
+}
+
+function saveWindowBounds() {
+  if (mainWindow) {
+    const bounds = mainWindow.getBounds();
+    store.set('mainWindowBounds', bounds);
+  }
 }
 
 function initUpdates() {
@@ -89,6 +116,7 @@ function initUpdates() {
 })();
 
 app.on('window-all-closed', () => {
+  saveWindowBounds();
   app.quit();
 });
 
@@ -169,8 +197,18 @@ ipcMain.on('openApp', async () => {
       return { action: 'deny' };
     });
 
+    // Periodically check for updates (every 4 hours)
     if (isProd) {
-      setTimeout(() => initUpdates(), 3000);
+      setTimeout(() => initUpdates(), 3000);  // Initial check after startup
+
+      // Add periodic checks
+      setInterval(async () => {
+        console.log("Running periodic update check...");
+        const updateInfo = await checkForAppUpdate();
+        if (updateInfo?.updateAvailable) {
+          mainWindow.webContents.send('updatePrompt', updateInfo);
+        }
+      }, 4 * 60 * 60 * 1000); // Check every 4 hours
     }
   }, waitTime);
 });
@@ -203,6 +241,14 @@ ipcMain.on('installUpdate', async (_event, _arg) => {
 
 ipcMain.on('restartApp', (_event, _arg) => {
   autoUpdater.quitAndInstall();
+});
+
+ipcMain.on('saveAndClose', () => {
+  if (mainWindow) {
+    const bounds = mainWindow.getBounds();
+    store.set('mainWindowBounds', bounds);
+  }
+  app.quit();
 });
 
 function checkProcess(query, cb) {
@@ -298,6 +344,16 @@ function extractVersionFromText(text: string): string | null {
   // Looks for patterns like 1.2.3 or v1.2.3
   const match = text.match(/v?(\d+\.\d+\.\d+([a-zA-Z0-9\-\.]*)?)/);
   return match ? match[1] : null;
+}
+
+function extractVersionFromString(text: string): string | null {
+  const match = text.match(/(?:[Vv]ersion|[Rr]elease|[Vv])?\s*\.?\s*(\d+\.\d+(?:\.\d+)?(?:-[\w\.]+)?)/);
+  if (match && match[1]) {
+    const parts = match[1].split('.');
+    if (parts.length === 2) return `${parts[0]}.${parts[1]}.0`;
+    return match[1];
+  }
+  return null;
 }
 
 // Helper: Scan plugin directory for version (now only uses config or version.json)
@@ -605,6 +661,7 @@ ipcMain.handle('checkAppUpdate', async () => {
   return await checkForAppUpdate();
 });
 
+// Add progress support in downloadAndInstallAppUpdate
 ipcMain.handle('downloadAndInstallAppUpdate', async (_event, downloadUrl) => {
   const tmpPath = path.join(app.getPath('temp'), path.basename(downloadUrl));
   const writer = fs.createWriteStream(tmpPath);
@@ -612,17 +669,73 @@ ipcMain.handle('downloadAndInstallAppUpdate', async (_event, downloadUrl) => {
   const response = await axios({
     url: downloadUrl,
     method: 'GET',
-    responseType: 'stream'
+    responseType: 'stream',
   });
 
-  response.data.pipe(writer);
+  const totalLength = parseInt(response.headers['content-length'], 10);
+  let downloaded = 0;
 
+  response.data.on('data', chunk => {
+    downloaded += chunk.length;
+    const percent = (downloaded / totalLength) * 100;
+    BrowserWindow.getAllWindows()[0]?.webContents.send('updateProgress', { percent });
+
+  });
+
+  // Wait for stream to fully finish before spawning installer
   return new Promise((resolve, reject) => {
-    writer.on('finish', () => {
-      require('child_process').spawn(tmpPath, [], { detached: true, stdio: 'ignore' }).unref();
-      app.quit();
-      resolve(true);
-    });
+    response.data.pipe(writer);
+
     writer.on('error', reject);
+
+    writer.on('finish', () => {
+      // Give the system a tiny delay to flush filesystem buffers (optional but helps)
+      setTimeout(() => {
+        try {
+          require('child_process').spawn(tmpPath, [], {
+            detached: true,
+            stdio: 'ignore'
+          }).unref();
+          app.quit(); // Quit the app cleanly
+          resolve(true);
+        } catch (spawnErr) {
+          reject(spawnErr);
+        }
+      }, 100); // small delay to avoid EBUSY
+    });
   });
 });
+
+ipcMain.handle('readInstalledVersion', (event, arg) => {
+  const { pluginName } = arg;
+  const installLogDir = app.getPath('userData');
+  const logFile = path.join(installLogDir, `${pluginName}.installed_version.txt`);
+  let installedVersion: string | null = null;
+
+  if (fs.existsSync(logFile)) {
+    const content = fs.readFileSync(logFile, 'utf8');
+    const match = content.match(/Installed version:\s*([^\n]+)/i);
+    if (match) installedVersion = match[1].trim();
+  }
+
+  return { pluginName, installedVersion };
+});
+
+ipcMain.handle('setSeenVersion', async (_event, version: string) => {
+  const file = path.join(app.getPath('userData'), 'last_seen_version.txt');
+  fs.writeFileSync(file, version, 'utf8');
+  return true;
+});
+
+ipcMain.handle('getSeenVersion', async () => {
+  const file = path.join(app.getPath('userData'), 'last_seen_version.txt');
+  if (fs.existsSync(file)) {
+    return fs.readFileSync(file, 'utf8');
+  }
+  return null;
+});
+
+ipcMain.handle('getAppVersion', () => {
+  return app.getVersion();
+});
+

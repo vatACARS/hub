@@ -1,17 +1,18 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import { app, ipcMain } from 'electron';
 
-// Your existing ipc handler
+// Your existing ipc handler with added invoke method
 const handler = {
   send(channel: string, value: unknown) {
     ipcRenderer.send(channel, value);
   },
   on(channel: string, callback: (...args: unknown[]) => void) {
-    const subscription = (_event: IpcRendererEvent, ...args) => callback(...args);
+    const subscription = (_event: IpcRendererEvent, ...args: unknown[]) => callback(...args);
     ipcRenderer.on(channel, subscription);
-
-    return () => {
-      ipcRenderer.removeListener(channel, subscription);
-    };
+    return () => ipcRenderer.removeListener(channel, subscription);
+  },
+  invoke(channel: string, ...args: unknown[]) {
+    return ipcRenderer.invoke(channel, ...args);
   },
 };
 
@@ -23,6 +24,10 @@ const preloadPages = async () => {
     "/vatsys",
     "/pilot",
     "/OzStrips",
+    "/vatpacplugin",
+    "/discordplugin",
+    "/eventsplugin",
+    "/airportsplugin",
   ];
 
   for (const page of pagesToPreload) {
@@ -35,7 +40,6 @@ const preloadPages = async () => {
   }
 };
 
-
 // Expose to the window
 contextBridge.exposeInMainWorld('ipc', handler);
 
@@ -45,5 +49,6 @@ contextBridge.exposeInMainWorld('ipc', handler);
   await preloadPages();
 })();
 
+ipcMain.handle('getAppVersion', () => app.getVersion());
 
 export type IpcHandler = typeof handler;

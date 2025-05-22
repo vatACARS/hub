@@ -5,11 +5,9 @@ export default function ServiceIndex() {
     window.ipc.send('openApp', null);
 
     // Wait until main app signals readiness
-    const unsubscribe = window.ipc.on('mainAppReady', () => {
-      window.ipc.send('appReady', null); // Tell main process we're done with splash
-    });
-
-    return () => unsubscribe?.();
+    return () => {
+      // Optional cleanup logic if needed
+    };
   }, []);
 
   return (

@@ -8,13 +8,14 @@ const appClientsList = [
     { name: 'vatSys Plugin', path: '/vatsys' },
     { name: 'Euroscope Plugin', path: '/euroscope' },
     { name: 'Pilot Client', path: '/pilot' },
-    // Recommended Plugins will be a toggle, not a page
 ];
 
 const recommendedPluginsList = [
     { name: 'OzStrips', path: '/OzStrips' },
     { name: 'Vatpac Plugin (vatSys Server Lite)', path: '/vatpacplugin' },
-    // Add more recommended plugins here as needed
+    { name: 'Discord Plugin', path: '/discordplugin' },
+    { name: 'Events Plugin', path: '/eventsplugin' },
+    { name: 'Airports Plugin', path: '/airportsplugin' },
 ];
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -23,37 +24,41 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     const [fadeOutContent, setFadeOutContent] = useState(false);
     const [fadeOutSidebar, setFadeOutSidebar] = useState(false);
     const [navigatingPath, setNavigatingPath] = useState<string | null>(null);
-    const [showRecommended, setShowRecommended] = useState(false);
+    // Use sessionStorage to remember sidebar state for the session only
+    const [showRecommended, setShowRecommended] = useState(() => {
+        if (typeof window !== 'undefined' && window.sessionStorage) {
+            // Always default to main area on first load (not recommended)
+            return false;
+        }
+        return false;
+    });
 
     const handleNavigation = (path: string) => {
         if (path === router.pathname) return;
         setNavigatingPath(path);
         setFadeOutContent(true);
         setTimeout(() => {
-            router.push(path);
+            router.push(path).then(() => {
+                setNavigatingPath(null); // Reset navigatingPath after navigation
+            });
         }, 300);
     };
 
+    const toggleSidebarState = (state: boolean) => {
+        setShowRecommended(state);
+        // Save the state to sessionStorage for this session only
+        if (typeof window !== 'undefined' && window.sessionStorage) {
+            window.sessionStorage.setItem('sidebarState', state ? 'recommended' : 'applications');
+        }
+    };
+
+    // On mount, restore sidebar state for this session only
     useEffect(() => {
-        if (!navigatingPath) return;
-
-        setFadeOutContent(false);
-
-        const fadeTimer = setTimeout(() => {
-            setFadeOutSidebar(true);
-        }, 500);
-
-        const collapseTimer = setTimeout(() => {
-            setSidebarOpen(false);
-            setFadeOutSidebar(false);
-            setNavigatingPath(null);
-        }, 1000);
-
-        return () => {
-            clearTimeout(fadeTimer);
-            clearTimeout(collapseTimer);
-        };
-    }, [router.pathname]);
+        if (typeof window !== 'undefined' && window.sessionStorage) {
+            const sidebarState = window.sessionStorage.getItem('sidebarState');
+            setShowRecommended(sidebarState === 'recommended');
+        }
+    }, []);
 
     return (
         <div className="relative h-screen w-screen flex overflow-hidden">
@@ -82,7 +87,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             >
                 <div className="flex flex-col space-y-2">
                     <h2 className="text-white text-xl font-bold mb-2 text-center">
-                        Applications
+                        {showRecommended ? 'Recommended Plugins' : 'Applications'}
                     </h2>
                     <AnimatePresence mode="wait">
                         <motion.div
@@ -101,13 +106,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                                             onClick={() => handleNavigation(client.path)}
                                             className={`p-3 rounded-md cursor-pointer hover:bg-slate-700 text-slate-300 ${router.pathname === client.path ? 'bg-blue-500 text-white font-bold' : ''
                                                 }`}
-                                            disabled={!!navigatingPath}
                                         >
                                             {client.name}
                                         </button>
                                     ))}
                                     <button
-                                        onClick={() => setShowRecommended(true)}
+                                        onClick={() => toggleSidebarState(true)}
                                         className="p-3 rounded-md cursor-pointer hover:bg-emerald-700 text-emerald-300 font-semibold border-t border-slate-700 mt-2"
                                     >
                                         Recommended Plugins
@@ -116,19 +120,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                             ) : (
                                 <>
                                     <button
-                                        onClick={() => setShowRecommended(false)}
+                                        onClick={() => toggleSidebarState(false)}
                                         className="flex items-center gap-2 p-2 mb-2 text-slate-400 hover:text-white"
                                     >
                                         <HiChevronLeft /> Back
                                     </button>
-                                    <h3 className="text-emerald-300 font-bold mb-2 text-center">Recommended Plugins</h3>
                                     {recommendedPluginsList.map((plugin) => (
                                         <button
                                             key={plugin.name}
                                             onClick={() => handleNavigation(plugin.path)}
                                             className={`p-3 rounded-md cursor-pointer hover:bg-slate-700 text-slate-300 ${router.pathname === plugin.path ? 'bg-blue-500 text-white font-bold' : ''
                                                 }`}
-                                            disabled={!!navigatingPath}
                                         >
                                             {plugin.name}
                                         </button>
